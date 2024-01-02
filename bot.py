@@ -9,6 +9,51 @@ from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from tabulate import tabulate
 import time
+import mysql.connector
+from mysql.connector import Error
+import os
+
+
+db_host = os.getenv('host-hoogvliet-scraping')
+db_db = os.getenv('db-hoogvliet-scraping')
+db_user = os.getenv('user-hoogvliet-scraping')
+db_password = os.getenv('pass-hoogvliet-scraping')
+
+def connect_to_database():
+    try:
+        connection = mysql.connector.connect(
+            host= db_host,
+            database= db_db,
+            user= db_user,
+            password= db_password
+        )
+        return connection
+    except Error as e:
+        print(f"Error while connecting to mySQL database: {e}")
+        return None
+    
+def create_table(connection):
+    cursor = connection.cursor()
+    create_table_query = '''
+    CREATE TABLE IF NOT EXISTS prices (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        ProductID VARCHAR(255) NOT NULL,
+        productName VARCHAR(255) NOT NULL,
+        price VARCHAR(255) NOT NULL,
+        category VARCHAR(255) NOT NULL,
+        MediumCategory VARCHAR(255),
+        SpecialCategory VARCHAR(255),
+        imageURL VARCHAR(255) NOT NULL,
+        date DATE
+        );
+'''
+    cursor.execute(create_table_query)
+    connection.commit()
+    cursor.close()
+
+connection = connect_to_database()
+if connection:
+    create_table(connection)
 
 #checking how long it takes to run the script
 start_time = time.time()
@@ -23,8 +68,7 @@ service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=options)
 
 # scrape hoogvliet.com
-urls = ["https://www.hoogvliet.com/INTERSHOP/web/WFS/org-webshop-Site/nl_NL/-/EUR/ViewTWParametricSearch-SimpleOfferSearch?PageNumber=0&PageSize=16&SelectedSearchResult=SFProductSearch&SearchTerm=&SelectedItem=&SortingOption=Relevantie&CategoryName=999999-100&CategoryTitle=Aardappelen,%20groente,%20fruit&SearchTermKey=null"
-    #   ,"https://www.hoogvliet.com/INTERSHOP/web/WFS/org-webshop-Site/nl_NL/-/EUR/ViewTWParametricSearch-SimpleOfferSearch?PageNumber=0&PageSize=16&SelectedSearchResult=SFProductSearch&SearchTerm=&SelectedItem=&SortingOption=Relevantie&CategoryName=100-10001&CategoryTitle=Producten--Aardappelen&SearchTermKey=null"       
+urls = ["https://www.hoogvliet.com/INTERSHOP/web/WFS/org-webshop-Site/nl_NL/-/EUR/ViewTWParametricSearch-SimpleOfferSearch?PageNumber=0&PageSize=16&SelectedSearchResult=SFProductSearch&SearchTerm=&SelectedItem=&SortingOption=Relevantie&CategoryName=100-10001&CategoryTitle=Producten--Aardappelen&SearchTermKey=null"       
 ]
 
 # create empty list for tabulate
@@ -39,6 +83,7 @@ for url in urls:
     time.sleep(.5)
 
     # Explicit wait
+    #wait for pagination-total to be present in the HTML and then continue
     try:
         wait = WebDriverWait(driver, 10)  # Wait for up to 10 seconds
         wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'pagination-total')))
@@ -109,7 +154,7 @@ for url in urls:
         # Now you have the category, title, and URL for each category
         print(f"Category: {data_category}, Title: {data_title}, URL: {data_url}")
         medium_url.append(f"https://www.hoogvliet.com/INTERSHOP/web/WFS/org-webshop-Site/nl_NL/-/EUR/ViewTWParametricSearch-SimpleOfferSearch?PageNumber=0&PageSize=16&SelectedSearchResult=SFProductSearch&SearchTerm=&SelectedItem=&SortingOption=Relevantie&CategoryName=100-{data_category}&CategoryTitle=Aardappelen,%20groente,%20fruit--{data_title}&SearchTermKey=null")
-        
+        # print(medium_url)
 
     # add date to use in database
     date = time.strftime("%Y-%m-%d")
@@ -133,13 +178,21 @@ for url in urls:
         
         #append all the data to the products list so we can tabulate it
         products.append([ArtikelNumber, name.text, full_price, category, image, date])
-        print(tabulate(products, headers=['Artikel Nummer', 'Product Name', 'Price (€)', 'category','image url', 'date'], tablefmt='grid'))
-        print("\nTotal number of products scraped:", len(products))
-    print("Done scraping: ", category, "\n", url)
+
+        if connection:
+            cursor = connection.cursor()
+            insert_query = '''
+            INSERT INTO prices (ProductID, productName, price, category, imageURL, date)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            '''
+            cursor.execute(insert_query, [ArtikelNumber, name.text, full_price, category, image, date])
+            connection.commit()
+            
+    cursor.close()
+    print(tabulate(products, headers=['Artikel Nummer', 'Product Name', 'Price (€)', 'category','image url', 'date'], tablefmt='grid'))
+    print("\nTotal number of products scraped:", len(products))
+    print("Done scraping: ", category, "\n")
 driver.quit()
-# print(medium_url)
-
-
 
 # print how long it took to run the script
 end_time = time.time()
